@@ -1,0 +1,8 @@
+model/
+input/
+output/
+pyvenv/
+pysrc/__pycache__
+pysrc/*.pyc
+
+
