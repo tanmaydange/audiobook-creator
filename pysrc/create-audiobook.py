@@ -1,96 +1,127 @@
 import os
+import json
 import subprocess
-from pydub import AudioSegment
+import re
+import shutil
 
-# --- Configuration ---
-INPUT_TEXT_FILE = '../input/novel_prepared_for_audio.txt'  # <-- RENAME THIS TO YOUR FILE
-OUTPUT_MP3_FILE = '../output/The-Collected-Short-Stories-Jeffrey-Archer-Audiobook_Final.mp3'
-MODEL_PATH = '../model/en_US-amy-medium.onnx'
-CONFIG_PATH = '../model/en_US-amy-medium.onnx.json'
-MAX_CHARS_PER_CHUNK = 1000  # Split the text for stability and progress
-TEMP_WAV_DIR = 'temp_wav_files'
+# --- CONFIGURATION ---
+INPUT_FILE = "novel.txt"
+OUTPUT_FOLDER = "audiobook_output"
+TEMP_FOLDER = "temp_chunks"
+STATE_FILE = "state.json"
+PIPER_EXE = "./piper"  # Path to your piper executable
+PIPER_MODEL = "en_US-lessac-medium.onnx"
+CHUNK_SIZE = 2000  # Characters per chunk (adjust as needed)
 
-def split_text_into_chunks(text, max_chars):
-    """Splits text into chunks of maximum size, respecting paragraphs/sentences."""
+def clean_text(text):
+    """Basic cleaning to remove excessive whitespace."""
+    return re.sub(r'\s+', ' ', text).strip()
+
+def split_into_chunks(text, size):
+    """Splits text into chunks of roughly 'size' characters."""
+    words = text.split(' ')
     chunks = []
-    current_chunk = ""
-    for paragraph in text.split('\n'):
-        if len(current_chunk) + len(paragraph) + 1 < max_chars:
-            current_chunk += paragraph + " "
-        else:
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            current_chunk = paragraph + " "
+    current_chunk = []
+    current_length = 0
+    
+    for word in words:
+        current_chunk.append(word)
+        current_length += len(word) + 1
+        if current_length >= size:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+            current_length = 0
     if current_chunk:
-        chunks.append(current_chunk.strip())
+        chunks.append(" ".join(current_chunk))
     return chunks
 
-def convert_chunk_to_wav(chunk_text, output_wav_path):
-    """Calls the piper CLI tool to convert text to a WAV file."""
-    try:
-        # The 'piper' command-line utility installed by piper-tts package is called here
-        command = [
-            "piper",
-            "--model", MODEL_PATH,
-            "--config", CONFIG_PATH,
-            "--output_file", output_wav_path,
-            "--length_scale", "1.25"  # This makes it 25% slower and more "narrative"
-        ]
-        
-        # Pass the text to piper via standard input
-        result = subprocess.run(command, input=chunk_text.encode('utf-8'), check=True, capture_output=True)
-        # print(f"Piper Output: {result.stdout.decode().strip()}")
-        # print(f"Piper Errors: {result.stderr.decode().strip()}")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Error during Piper conversion of {output_wav_path}: {e}")
-        # Optionally, print the text that failed for debugging: print(chunk_text)
-        raise
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"last_completed_chunk": -1, "total_chunks": 0}
 
-# --- Main Logic ---
-if __name__ == "__main__":
-    if not os.path.exists(TEMP_WAV_DIR):
-        os.makedirs(TEMP_WAV_DIR)
+def save_state(index, total):
+    with open(STATE_FILE, 'w') as f:
+        json.dump({"last_completed_chunk": index, "total_chunks": total}, f)
+
+def run_piper(text, output_wav):
+    """Calls Piper TTS via subprocess."""
+    command = [
+        PIPER_EXE,
+        "--model", PIPER_MODEL,
+        "--output_file", output_wav
+    ]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    process.communicate(input=text.encode('utf-8'))
+
+def convert_to_mp3(input_wav, output_mp3):
+    """Converts WAV to MP3 using ffmpeg."""
+    subprocess.run([
+        'ffmpeg', '-y', '-i', input_wav, 
+        '-codec:a', 'libmp3lame', '-qscale:a', '2', 
+        output_mp3
+    ], check=True, capture_output=True)
+
+def main():
+    # 1. Setup Folders
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+    # 2. Read and Chunk Text
+    with open(INPUT_FILE, 'r', encoding='utf-8') as f:
+        full_text = clean_text(f.read())
     
-    # 1. Read the cleaned novel text
-    print(f"Reading novel from {INPUT_TEXT_FILE}...")
-    with open(INPUT_TEXT_FILE, 'r', encoding='utf-8') as f:
-        novel_text = f.read()
+    chunks = split_into_chunks(full_text, CHUNK_SIZE)
+    total_chunks = len(chunks)
+    
+    # 3. Load Resume State
+    state = load_state()
+    start_index = state["last_completed_chunk"] + 1
+    print(f"Total Chunks: {total_chunks}. Resuming from Chunk {start_index}...")
 
-    # 2. Split into chunks
-    text_chunks = split_text_into_chunks(novel_text, MAX_CHARS_PER_CHUNK)
-    print(f"Novel split into {len(text_chunks)} segments for processing.")
+    # 4. Processing Loop
+    for i in range(start_index, total_chunks):
+        print(f"--- Processing Chunk {i+1}/{total_chunks} ---")
+        
+        wav_path = os.path.join(TEMP_FOLDER, f"chunk_{i}.wav")
+        mp3_path = os.path.join(TEMP_FOLDER, f"chunk_{i}.mp3")
 
-    # 3. Convert each chunk to a temporary WAV file
-    wav_files = []
-    for i, chunk in enumerate(text_chunks):
-        temp_wav_file = os.path.join(TEMP_WAV_DIR, f"segment_{i:04d}.wav")
-        print(f"Converting segment {i+1}/{len(text_chunks)}...")
-        try:
-            convert_chunk_to_wav(chunk, temp_wav_file)
-            wav_files.append(temp_wav_file)
-        except Exception as e:
-            print(f"FATAL: Skipping segment {i+1} due to error: {e}")
+        # Generate Audio
+        run_piper(chunks[i], wav_path)
+        
+        # Convert to MP3
+        convert_to_mp3(wav_path, mp3_path)
+        
+        # Cleanup WAV immediately to save space
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
             
-    # 4. Concatenate and convert to MP3 using pydub
-    print("\n--- Combining segments and converting to MP3 ---")
-    combined_audio = AudioSegment.empty()
-    
-    for wav_file in wav_files:
-        try:
-            segment = AudioSegment.from_wav(wav_file)
-            combined_audio += segment
-        except Exception as e:
-            print(f"Warning: Could not process {wav_file} for combination. Error: {e}")
+        # Update State
+        save_state(i, total_chunks)
 
-    # Export to the final MP3 file
-    print(f"Exporting final audiobook to {OUTPUT_MP3_FILE}...")
-    combined_audio.export(OUTPUT_MP3_FILE, format="mp3")
+    # 5. Final Concatenation
+    print("All chunks completed. Joining into final MP3...")
     
-    # 5. Clean up temporary files
-    print("Cleaning up temporary files...")
-    for wav_file in wav_files:
-        os.remove(wav_file)
-    os.rmdir(TEMP_WAV_DIR)
+    # Create a list file for ffmpeg
+    list_file_path = os.path.join(TEMP_FOLDER, "file_list.txt")
+    with open(list_file_path, 'w') as f:
+        for i in range(total_chunks):
+            f.write(f"file 'chunk_{i}.mp3'\n")
 
-    print(f"\n✅ Audiobook created successfully as {OUTPUT_MP3_FILE}!")
+    final_output = os.path.join(OUTPUT_FOLDER, "final_audiobook.mp3")
+    
+    # Run ffmpeg concat
+    subprocess.run([
+        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', 
+        '-i', list_file_path, '-c', 'copy', final_output
+    ], check=True)
+
+    print(f"Success! Audiobook saved to: {final_output}")
+    
+    # Optional: Wipe temp folder and state on 100% completion
+    # shutil.rmtree(TEMP_FOLDER)
+    # os.remove(STATE_FILE)
+
+if __name__ == "__main__":
+    main()
