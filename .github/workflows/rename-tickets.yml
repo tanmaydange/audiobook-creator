@@ -1,0 +1,31 @@
+name: Auto-Prefix Issue Titles
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  add-prefix:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Rename Issue with AC Prefix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.payload.issue.number;
+            const originalTitle = context.payload.issue.title;
+            
+            // This builds the custom Jira-like string: NRS-1, NRS-2, etc.
+            const customTicketId = `[AC-${issueNumber}]`;
+            
+            // Check if it already has the prefix to avoid an infinite loop
+            if (!originalTitle.startsWith(customTicketId)) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                title: `${customTicketId} ${originalTitle}`
+              });
+            }

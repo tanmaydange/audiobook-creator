@@ -68,6 +68,17 @@ wget -P models/ https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_U
 
 ```
 
+## Other Voice Models
+
+Amy Medium Quality: 
+https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/amy/medium
+
+
+Ryan High Quality
+https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/ryan/high
+
+
+
 ---
 
 ## 📋 Usage Guide
