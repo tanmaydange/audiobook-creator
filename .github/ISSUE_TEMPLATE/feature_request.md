@@ -1,8 +1,8 @@
 ---
-name: Feature request
+name: AudioBook Feature request
 about: Suggest an idea for this project
-title: ''
-labels: ''
+title: '[AC-ID]:'
+labels: '["project: audiobook-creator"]'
 assignees: ''
 
 ---
